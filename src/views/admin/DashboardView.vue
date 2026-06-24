@@ -1,5 +1,9 @@
 <script setup>
+import { onMounted } from 'vue'
 import AdminLayout from '@/layouts/AdminLayout.vue'
+import { useAdminDashboardStore } from '@/stores/admin/dashboard'
+
+const dashboardStore = useAdminDashboardStore()
 
 // Chart 1: Revenue (Bar Chart)
 const revenueOptions = {
@@ -48,6 +52,10 @@ const categoryOptions = {
 }
 
 const categorySeries = [44, 55, 13, 33]
+
+onMounted(async () => {
+  await dashboardStore.loadDashboard()
+})
 </script>
 
 <template>
@@ -80,8 +88,8 @@ const categorySeries = [44, 55, 13, 33]
             </svg>
           </div>
         </div>
-        <div class="stat-title text-base-content/60 font-semibold mb-1">Total Revenue</div>
-        <div class="stat-value text-green-500 text-3xl">฿339K</div>
+        <div class="stat-title text-base-content/60 font-semibold mb-1">Product</div>
+        <div class="stat-value text-green-500 text-3xl">{{ dashboardStore.stats.product }}</div>
       </div>
 
       <div class="stat p-6">
@@ -102,8 +110,8 @@ const categorySeries = [44, 55, 13, 33]
             </svg>
           </div>
         </div>
-        <div class="stat-title text-base-content/60 font-semibold mb-1">Total Users</div>
-        <div class="stat-value text-blue-500 text-3xl">4,200</div>
+        <div class="stat-title text-base-content/60 font-semibold mb-1">Users</div>
+        <div class="stat-value text-blue-500 text-3xl">{{ dashboardStore.stats.user }}</div>
       </div>
 
       <div class="stat p-6">
@@ -124,8 +132,8 @@ const categorySeries = [44, 55, 13, 33]
             </svg>
           </div>
         </div>
-        <div class="stat-title text-base-content/60 font-semibold mb-1">New Orders</div>
-        <div class="stat-value text-base-content text-3xl">1,200</div>
+        <div class="stat-title text-base-content/60 font-semibold mb-1">Orders</div>
+        <div class="stat-value text-base-content text-3xl">{{ dashboardStore.stats.order }}</div>
       </div>
     </div>
 

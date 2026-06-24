@@ -1,5 +1,5 @@
 <script setup>
-import { reactive } from 'vue'
+import { onMounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserCartStore } from '@/stores/user/cart'
 import UserLayout from '@/layouts/UserLayout.vue'
@@ -14,10 +14,14 @@ const formData = reactive({
 const router = useRouter()
 const userCartStore = useUserCartStore()
 
-const payment = () => {
-  userCartStore.placeOrder(formData)
-  // router.push({ name: 'success' })
+const payment = async () => {
+  const responseData = await userCartStore.placeOrder(formData)
+  location.href = responseData.redirectUrl
 }
+
+onMounted(() => {
+  Omise.setPublicKey(import.meta.env.VITE_OMISE_PUBLIC_KEY)
+})
 </script>
 
 <template>

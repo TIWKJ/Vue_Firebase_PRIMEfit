@@ -1,32 +1,162 @@
-/**
- * Import function triggers from their respective submodules:
- *
- * const {onCall} = require("firebase-functions/v2/https");
- * const {onDocumentWritten} = require("firebase-functions/v2/firestore");
- *
- * See a full list of supported triggers at https://firebase.google.com/docs/functions
- */
+const { onRequest } = require('firebase-functions/https')
+const { onDocumentWritten} = require('firebase-functions/v2/firestore')
 
-const {setGlobalOptions} = require("firebase-functions");
-const {onRequest} = require("firebase-functions/https");
-const logger = require("firebase-functions/logger");
+const express = require('express')
+const { db, auth, realtimeDB } = require('./firebaseConfig.js')
+const app = express()
 
-// For cost control, you can set the maximum number of containers that can be
-// running at the same time. This helps mitigate the impact of unexpected
-// traffic spikes by instead downgrading performance. This limit is a
-// per-function limit. You can override the limit for each function using the
-// `maxInstances` option in the function's options, e.g.
-// `onRequest({ maxInstances: 5 }, (req, res) => { ... })`.
-// NOTE: setGlobalOptions does not apply to functions using the v1 API. V1
-// functions should each use functions.runWith({ maxInstances: 10 }) instead.
-// In the v1 API, each function can only serve one request per container, so
-// this will be the maximum concurrent request count.
-setGlobalOptions({ maxInstances: 10 });
+const omise = require('omise')({
+  secretKey: process.env.OMISE_SECRET_KEY,
+  omiseVersion: '2019-05-29',
+})
 
-// Create and deploy your first functions
-// https://firebase.google.com/docs/functions/get-started
+const createCharge = (source, amount, orderId) => {
+  return new Promise((resolve, reject) => {
+    omise.charges.create(
+      {
+        amount: amount * 100,
+        currency: 'THB',
+        return_uri: `http://localhost:5173/success?order_id=${orderId}`,
+        metadata: {
+          orderId,
+        },
+        source,
+      },
+      (err, resp) => {
+        if (err) {
+          return reject(err)
+        }
+        resolve(resp)
+      },
+    )
+  })
+}
 
-// exports.helloWorld = onRequest((request, response) => {
-//   logger.info("Hello logs!", {structuredData: true});
-//   response.send("Hello from Firebase!");
-// });
+app.post('/placeorder', async (req, res) => {
+  try {
+    const checkoutData = req.body.checkout
+    const sourceOmise = req.body.source
+    let checkoutProducts = []
+    let totalPrice = 0
+    let orderData = {}
+    let successOrderId = ''
+    let omiseResponse = {}
+
+    const products = checkoutData.products
+
+    await db.runTransaction(async (t) => {
+      for (const product of products) {
+        const productRef = db.collection('products').doc(product.productId)
+        const productSnapshot = await productRef.get()
+        const productData = productSnapshot.data()
+
+        let checkoutProduct = product
+        checkoutProduct.name = productData.name
+        checkoutProduct.imageUrl = productData.imageUrl
+        checkoutProduct.price = productData.price
+        checkoutProduct.totalPrice = productData.price * product.quantity
+        totalPrice += checkoutProduct.totalPrice
+        checkoutProducts.push(checkoutProduct)
+
+        if (productData.remainQuantity - product.quantity < 0) {
+          throw new Error(`${productData.name} is out of Stock!`)
+        }
+
+        // stock decrease
+        t.update(productRef, {
+          remainQuantity: productData.remainQuantity - product.quantity,
+        })
+      }
+
+      const orderRef = db.collection('orders')
+      const orderId = orderRef.doc().id
+
+      omiseResponse = await createCharge(sourceOmise, totalPrice, orderId)
+
+      orderData = {
+        ...checkoutData,
+        chargeId: omiseResponse.id,
+        products: checkoutProducts,
+        totalPrice,
+        paymentMethod: 'rabbit_linepay',
+        createdAt: new Date(),
+        status: 'pending',
+      }
+
+      t.set(orderRef.doc(orderId), orderData)
+
+      successOrderId = orderId
+    })
+
+    console.log('omiseResponse', omiseResponse)
+
+    res.json({
+      message: 'Hello World from firebase',
+      redirectUrl: omiseResponse.authorize_uri,
+    })
+  } catch (error) {
+    // stock not change
+    console.log('error', error)
+    res.status(400).json({
+      message: error.message,
+    })
+  }
+})
+
+app.post('/webhook', async (req, res) => {
+  try {
+    if (req.body.key === 'charge.complete') {
+      const webhookData = req.body.data
+
+      const orderId = webhookData.metadata.orderId
+      const chargeId = webhookData.id
+      const statusOrder = webhookData.status
+
+      const orderRef = db.collection('orders').doc(orderId)
+      const orderSnapshot = await orderRef.get()
+      const orderData = orderSnapshot.data()
+
+      if (orderData.chargeId !== chargeId) {
+        throw new Error('Error charge id')
+      }
+
+      if (orderData.status === 'pending') {
+        await orderRef.update({
+          status: statusOrder,
+        })
+        if (statusOrder !== 'successful') {
+          db.runTransaction(async (t) => {
+            for (const product of orderData.products) {
+              const productRef = db.collection('products').doc(product.productId)
+              const productSnapshot = await productRef.get()
+              const productData = productSnapshot.data()
+              t.update(productRef, {
+                remainQuantity: productData.remainQuantity + product.quantity
+              })
+            }
+          })
+        }
+      }
+    }
+  } catch (error) {
+    console.log('error', error)
+  }
+})
+
+exports.api = onRequest(app)
+
+exports.updateOrder = onDocumentWritten('orders/{orderId}', async (event) => {
+  try {
+    const oldData = event.data.before.data()
+    const newData = event.data.after.data()
+    const orderStateRef = realtimeDB.ref('stats/order')
+
+    if (newData.status === 'successful' && oldData && oldData.status === 'pending'){
+      await orderStateRef.transaction((currentValue) => {
+        return currentValue + newData.totalPrice
+      })
+    }
+  } catch (error) {
+    console.log('error', error)
+  }
+})

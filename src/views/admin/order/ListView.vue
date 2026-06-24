@@ -7,8 +7,8 @@ import { onMounted } from 'vue'
 
 const orderStore = useAdminOrderStore()
 
-onMounted(() => {
-  orderStore.loadOrder()
+onMounted(async () => {
+  await orderStore.loadOrder()
 })
 </script>
 
@@ -27,7 +27,7 @@ onMounted(() => {
       <Table :headers="['Customer Name', 'Total Price', 'Status', 'Created At', '']">
         <tr v-for="(order, index) in orderStore.list" :key="index" class="hover">
           <td>
-            <div class="font-bold text-base-content">{{ order.customerName }}</div>
+            <div class="font-bold text-base-content">{{ order.name }}</div>
           </td>
           <td>
             <div class="font-medium">฿{{ order.totalPrice }}</div>
@@ -36,10 +36,9 @@ onMounted(() => {
             <div
               class="badge"
               :class="{
-                'badge-success badge-outline': order.status === 'completed',
+                'badge-success badge-outline': order.status === 'successful',
                 'badge-warning badge-outline': order.status === 'pending',
-                'badge-error badge-outline': order.status === 'cancelled',
-                'badge-info badge-outline': order.status === 'processing',
+                'badge-error badge-outline': order.status === 'failed',
               }"
             >
               {{ order.status }}
@@ -47,13 +46,13 @@ onMounted(() => {
           </td>
           <td>
             <div class="text-sm text-base-content/70">
-              {{ order.updatedAt.toLocaleString() }}
+              {{ order.createdAt.toLocaleString() }}
             </div>
           </td>
           <td class="text-right">
             <div class="join">
               <RouterLink
-                :to="{ name: 'admin-order-detail', params: { id: index } }"
+                :to="{ name: 'admin-order-detail', params: { id: order.orderId } }"
                 class="btn btn-sm btn-square btn-ghost join-item text-info"
               >
                 <svg

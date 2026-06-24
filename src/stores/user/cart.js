@@ -1,52 +1,70 @@
 import { defineStore } from 'pinia'
-
-import { updateDoc, increment, doc, writeBatch } from 'firebase/firestore'
+import axios from 'axios'
+import { doc, getDoc } from 'firebase/firestore'
 import { db, realtimeDB } from '@/firebase'
 import { ref, onValue, set } from 'firebase/database'
 import { useAccountStore } from '@/stores/account'
 
+Omise.setPublicKey(import.meta.env.VITE_OMISE_PUBLIC_KEY)
+
+const createSource = (amount) => {
+  return new Promise((resolve, reject) => {
+    Omise.createSource('rabbit_linepay', {
+      amount: (amount * 100),
+      currency: 'THB'
+    }, (statusCode, response) => {
+      if (statusCode !== 200) {
+        return reject(response)
+      }
+      resolve(response)
+    })
+  })
+}
+
 export const useUserCartStore = defineStore('user-cart', {
   state: () => ({
     items: [],
-    checkout : {}
+    checkout: {},
   }),
   getters: {
-    summaryPrice (state) {
-      return state.items.reduce((acc, item) => acc + (item.price * item.quantity), 0)
+    summaryPrice(state) {
+      return state.items.reduce((acc, item) => acc + item.price * item.quantity, 0)
     },
-    quantity (state) {
+    quantity(state) {
       return state.items.reduce((acc, item) => acc + item.quantity, 0)
     },
-    user (state) {
+    user(state) {
       const accountStore = useAccountStore()
       return accountStore.user
     },
     cartRef(state) {
       return ref(realtimeDB, `carts/${this.user.uid}`)
-    }
+    },
   },
   actions: {
-    async loadCart () {
+    async loadCart() {
       if (this.user.uid) {
-        onValue(this.cartRef, (snapshot) => {
-          const data = snapshot.val()
-          if(data) {
-            this.items = data
-          }
-        }, (err) => {
-          console.error(err)
-        })
+        onValue(
+          this.cartRef,
+          (snapshot) => {
+            const data = snapshot.val()
+            if (data) {
+              this.items = data
+            }
+          },
+          (err) => {
+            console.error(err)
+          },
+        )
       } else {
         const previousCart = localStorage.getItem('cart-item')
-        if(previousCart) {
+        if (previousCart) {
           this.items = JSON.parse(previousCart)
         }
       }
     },
-    async addToCart (productData) {
-      const itemIndex = this.items.findIndex(
-        item => item.name === productData.name
-      )
+    async addToCart(productData) {
+      const itemIndex = this.items.findIndex((item) => item.name === productData.name)
       if (itemIndex >= 0) {
         this.updateQuantity(itemIndex, this.items[itemIndex].quantity + 1)
       } else {
@@ -54,54 +72,49 @@ export const useUserCartStore = defineStore('user-cart', {
         this.items.push(productData)
       }
 
-      await set(this.cartRef,this.items)
+      await set(this.cartRef, this.items)
     },
-    async updateQuantity (index, quantity) {
+    async updateQuantity(index, quantity) {
       this.items[index].quantity = parseInt(quantity)
-      await set(this.cartRef,this.items)
+      await set(this.cartRef, this.items)
     },
-    async removeItemInCart (index) {
+    async removeItemInCart(index) {
       this.items.splice(index, 1)
-      await set(this.cartRef,this.items)
+      await set(this.cartRef, this.items)
     },
     async placeOrder(userData) {
       try {
-        const orderData = {
+        const checkoutData = {
           ...userData,
-          totalPrice : this.summaryPrice,
-          paymentMethod : 'Credit Card',
-          createdDate : new Date().toLocaleString(),
-          orderNumber : `AA${Math.floor((Math.random() * 90000) + 10000)}`,
-          products: this.items
+          products: this.items.map((product) => ({
+            productId: product.productId,
+            quantity: product.quantity,
+          })),
         }
 
-        const batch = writeBatch(db)
+        const omiseResponse = await createSource(this.summaryPrice)
 
-        for (const product of orderData.products){
-          const productRef = doc(db, 'products', product.productId)
-          batch.update(productRef, {
-            remainQuantity: increment(-1)
-          })
-        }
+        const response = await axios.post('/api/placeorder', {
+          source: omiseResponse.id,
+          checkout: checkoutData,
+        })
 
-        await batch.commit()
-
-        localStorage.setItem("order-data",JSON.stringify(orderData))
-        
-        // clear cart
-        this.items = []
-        localStorage.removeItem("cart-item")
-        
-      } catch (error){
+        return response.data
+      } catch (error) {
         console.log('error', error)
       }
-
     },
-    loadCheckout(){
-      const orderData = localStorage.getItem("order-data")
-      if(orderData) {
-        this.checkout = JSON.parse(orderData)
+    async loadCheckout(orderId) {
+      try {
+        const orderRef = doc(db, 'orders', orderId)
+        const orderSnapshot = await getDoc(orderRef)
+        let orderData = orderSnapshot.data()
+        orderData.createdAt = orderData.createdAt.toDate().toLocaleString()
+        orderData.orderNumber = orderSnapshot.id
+        return orderData
+      } catch (error) {
+        throw new Error(error.message)
       }
-    }
-  }
+    },
+  },
 })
